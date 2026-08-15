@@ -1,0 +1,5 @@
+# @syncended/dsh-split-screen bundle patch.
+# The browser half is discovered through package.json `dsh.client` metadata.
+- insert:
+    - id: split-screen
+      name: "@syncended/dsh-split-screen"
