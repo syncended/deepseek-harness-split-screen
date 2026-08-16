@@ -37,6 +37,13 @@ async function loadClient() {
   };
   const client = definition.factory((id) => {
     if (id === "react") return React;
+    if (id === "@deepseek-ai/dsh-client-ui-primitives") return {
+      IconApiOutline14: function IconApiOutline14() {},
+      IconChevronDownOutline14: function IconChevronDownOutline14() {},
+      IconThinkOutline14: function IconThinkOutline14() {},
+      MarkdownText: function MarkdownText() {},
+      MessageText: function MessageText() {},
+    };
     throw new Error(`Unexpected require: ${id}`);
   });
   return { client, styles };
@@ -139,7 +146,7 @@ test("compact transcript projection keeps chat, tool, and failure rows", async (
   };
   const api = client.__testing;
   assert.deepEqual(plain(api.projectNode({ kind: "assistant", seq: 3, blocks: [{ kind: "text", text: "done" }] }, copy)), {
-    role: "assistant", label: "Agent", text: "done", key: "assistant-3",
+    role: "assistant", label: "Agent", reasoningLabel: "Reasoning", imageLabel: "[Image]", text: "done", blocks: [{ kind: "text", text: "done" }], key: "assistant-3",
   });
   assert.deepEqual(plain(api.projectNode({ kind: "tool-result", seq: 4, callId: "c1", call: { name: "bash" }, content: [{ type: "text", text: "ok" }], isError: false }, copy)), {
     role: "tool", label: "Tool", text: "✓ bash\nok", key: "tool-4",
