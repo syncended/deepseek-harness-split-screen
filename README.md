@@ -8,12 +8,12 @@ An iTerm-style session multiplexer for the [DeepSeek Harness](https://github.com
 - Drag any divider to resize adjacent panes.
 - Drag one pane header onto another to swap their sessions.
 - Up to 12 panes in one layout.
-- Session picker includes every visible, non-archived session from the Host.
-- **New in workspace…** creates or reuses a blank session in any registered workspace.
+- Native sidebar session selection: focus a pane, then choose its session from the standard Harness session list.
+- Switching sessions keeps the **Split** tab open and assigns the selected conversation to the focused pane.
 - Live streaming transcript, session status, queued replies, stop action, and older-history loading in every pane.
 - Structured-input indicator for approvals, plan review, and questions, with a jump to the full Harness view.
 - Layout, split ratios, pane order, selected session ids, and unsent pane drafts persist in browser `localStorage`.
-- Native **Split** conversation tab, Russian and English UI, dark-theme token compatibility, and keyboard controls.
+- Native **Split** conversation tab, Chinese and English UI tied to the Harness locale, dark-theme token compatibility, and keyboard controls.
 
 ## Install
 
@@ -42,8 +42,8 @@ Restart `dsh web` after first installation and refresh the existing Web GUI. A n
 1. Open any non-blank session and select the native **Split** conversation tab.
 2. Select a pane by clicking it.
 3. Use **Split vertically** or **Split horizontally** in the active pane header.
-4. Choose an existing session, or select **New in workspace…** to attach a fresh session from another workspace.
-5. Resize with the divider. Drag one pane header onto another to swap their contents.
+4. With the target pane focused, choose any session in the native sidebar. The **Split** tab stays open and the selected session is attached to that pane.
+5. Use the standard **New Session** action when you need another conversation. Resize with the divider or drag one pane header onto another to swap their contents.
 6. Select the native **Chat** tab to return to the full Harness conversation view.
 
 ### Keyboard shortcuts
@@ -77,8 +77,8 @@ The package has two runtime faces:
 The browser half uses supported public seams:
 
 - `ctx.slots.inject("conversation.view", ...)` for an additive native conversation tab.
-- `ctx.sessions.list`, `open(id)`, and `binding(id).session` for session discovery, history, streaming, prompts, cancellation, and paging.
-- `ctx.workspaces.list` and `connectWorkspace(id)` for cross-workspace session creation.
+- `ctx.sessions.list`, `open(id)`, and `binding(id).session` for native selection tracking, history, streaming, prompts, cancellation, and paging.
+- `ctx.workspaces.list` for native workspace and session labeling.
 
 The layout is a persisted binary tree. Split nodes own direction and ratio; leaf nodes own stable pane ids and optional session ids. Removing a leaf collapses its parent, while header drag-and-drop swaps leaf session assignments without rebuilding the tree.
 

@@ -38,11 +38,12 @@ async function loadClient() {
   const client = definition.factory((id) => {
     if (id === "react") return React;
     if (id === "@deepseek-ai/dsh-client-ui-primitives") return {
+      DisclosureRow: function DisclosureRow() {},
       IconApiOutline14: function IconApiOutline14() {},
-      IconChevronDownOutline14: function IconChevronDownOutline14() {},
       IconThinkOutline14: function IconThinkOutline14() {},
       MarkdownText: function MarkdownText() {},
       MessageText: function MessageText() {},
+      StateDot: function StateDot() {},
     };
     throw new Error(`Unexpected require: ${id}`);
   });
@@ -55,7 +56,7 @@ function plain(value) {
 
 test("client bundle registers and installs its stylesheet", async () => {
   const { client, styles } = await loadClient();
-  assert.deepEqual(Array.from(client.inject), ["slots", "sessions", "workspaces"]);
+  assert.deepEqual(Array.from(client.inject), ["slots", "sessions", "workspaces", "locale"]);
   assert.equal(typeof client.apply, "function");
   assert.equal(styles.length, 1);
   assert.equal(styles[0].dataset.plugin, "@syncended/dsh-split-screen");
@@ -67,9 +68,11 @@ test("client contributes one additive conversation view", async () => {
   const { client } = await loadClient();
   let slot;
   let registration;
+  let activeLocale = "en";
   const ctx = {
-    sessions: {},
+    sessions: { list: { getSnapshot: () => ({ current: undefined }), subscribe: () => () => {} } },
     workspaces: {},
+    locale: { getLocale: () => ({ active: activeLocale }), getSnapshot: () => ({ active: activeLocale, revision: 0 }), subscribe: () => () => {} },
     effect(factory) { return factory(); },
     slots: {
       inject(name, factory) { slot = name; return factory(); },
@@ -82,6 +85,8 @@ test("client contributes one additive conversation view", async () => {
   assert.equal(registration.options.name, "conversation.view");
   assert.equal(registration.options.order, 100);
   assert.equal(registration.options.label(), "Split");
+  activeLocale = "zh";
+  assert.equal(registration.options.label(), "分屏");
   assert.equal(typeof registration.component, "function");
 });
 
@@ -126,6 +131,15 @@ test("persisted layouts are validated and bounded", async () => {
   assert.equal(api.sanitizeLayout({ type: "other" }), null);
   const duplicate = { ...valid, second: { type: "pane", id: "one", sessionId: "s2" } };
   assert.deepEqual(plain(api.sanitizeLayout(duplicate)), { type: "pane", id: "one", sessionId: "s1" });
+});
+
+test("focused pane persists for native sidebar selection", async () => {
+  const { client } = await loadClient();
+  const api = client.__testing;
+  const layout = api.splitPane(api.pane("session-a", "pane-a"), "pane-a", "row", api.pane("session-b", "pane-b"));
+  assert.equal(api.loadActivePane(layout), "pane-a");
+  api.saveActivePane("pane-b");
+  assert.equal(api.loadActivePane(layout), "pane-b");
 });
 
 test("pane drafts persist by pane and session key", async () => {
