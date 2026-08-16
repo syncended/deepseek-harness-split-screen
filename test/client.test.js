@@ -6,6 +6,11 @@ import vm from "node:vm";
 async function loadClient() {
   let definition;
   const styles = [];
+  const storage = new Map();
+  const localStorage = {
+    getItem: (key) => storage.has(key) ? storage.get(key) : null,
+    setItem: (key, value) => storage.set(key, String(value)),
+  };
   const document = {
     head: { appendChild: (node) => styles.push(node) },
     querySelector: () => null,
@@ -14,6 +19,7 @@ async function loadClient() {
   const context = vm.createContext({
     window: { __ModuleLoader__: { load: (value) => { definition = value; } } },
     document,
+    localStorage,
     navigator: { language: "en" },
     console,
   });
@@ -46,9 +52,11 @@ test("client bundle registers and installs its stylesheet", async () => {
   assert.equal(typeof client.apply, "function");
   assert.equal(styles.length, 1);
   assert.equal(styles[0].dataset.plugin, "@syncended/dsh-split-screen");
+  assert.match(styles[0].textContent, /dsh-split-workspace-view/);
+  assert.doesNotMatch(styles[0].textContent, /dsh-split-overlay|dsh-split-launcher/);
 });
 
-test("client contributes one additive shell overlay", async () => {
+test("client contributes one additive conversation view", async () => {
   const { client } = await loadClient();
   let slot;
   let registration;
@@ -62,9 +70,11 @@ test("client contributes one additive shell overlay", async () => {
     },
   };
   client.apply(ctx);
-  assert.equal(slot, "shell.overlay");
+  assert.equal(slot, "conversation.view");
   assert.equal(registration.options.id, "split-screen");
-  assert.equal(registration.options.name, "shell.overlay");
+  assert.equal(registration.options.name, "conversation.view");
+  assert.equal(registration.options.order, 100);
+  assert.equal(registration.options.label(), "Split");
   assert.equal(typeof registration.component, "function");
 });
 
@@ -109,6 +119,16 @@ test("persisted layouts are validated and bounded", async () => {
   assert.equal(api.sanitizeLayout({ type: "other" }), null);
   const duplicate = { ...valid, second: { type: "pane", id: "one", sessionId: "s2" } };
   assert.deepEqual(plain(api.sanitizeLayout(duplicate)), { type: "pane", id: "one", sessionId: "s1" });
+});
+
+test("pane drafts persist by pane and session key", async () => {
+  const { client } = await loadClient();
+  const api = client.__testing;
+  api.saveDraft("pane-a:session-a", "unfinished message");
+  assert.equal(api.loadDraft("pane-a:session-a"), "unfinished message");
+  assert.equal(api.loadDraft("pane-a:session-b"), "");
+  api.saveDraft("pane-a:session-a", "");
+  assert.equal(api.loadDraft("pane-a:session-a"), "");
 });
 
 test("compact transcript projection keeps chat, tool, and failure rows", async () => {

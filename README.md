@@ -12,8 +12,8 @@ An iTerm-style session multiplexer for the [DeepSeek Harness](https://github.com
 - **New in workspace…** creates or reuses a blank session in any registered workspace.
 - Live streaming transcript, session status, queued replies, stop action, and older-history loading in every pane.
 - Structured-input indicator for approvals, plan review, and questions, with a jump to the full Harness view.
-- Layout, split ratios, pane order, and selected session ids persist in browser `localStorage`.
-- Russian and English UI, dark-theme token compatibility, keyboard controls, and browser fullscreen.
+- Layout, split ratios, pane order, selected session ids, and unsent pane drafts persist in browser `localStorage`.
+- Native **Split** conversation tab, Russian and English UI, dark-theme token compatibility, and keyboard controls.
 
 ## Install
 
@@ -35,16 +35,16 @@ Some pnpm-backed profiles require the workspace-root flag:
 dsh plugin --profile web add -w /home/syncended/deepseek-harness-split-screen
 ```
 
-Restart `dsh web` after first installation and refresh the existing Web GUI. A split-layout button appears near the bottom-right corner.
+Restart `dsh web` after first installation and refresh the existing Web GUI. A native **Split** tab appears beside the conversation's other views.
 
 ## Usage
 
-1. Open **Session Splitter** with the floating split icon.
+1. Open any non-blank session and select the native **Split** conversation tab.
 2. Select a pane by clicking it.
-3. Use **Split vertically** or **Split horizontally** in the toolbar or pane header.
+3. Use **Split vertically** or **Split horizontally** in the active pane header.
 4. Choose an existing session, or select **New in workspace…** to attach a fresh session from another workspace.
 5. Resize with the divider. Drag one pane header onto another to swap their contents.
-6. Press **Escape** or the close button to return to the normal Harness layout.
+6. Select the native **Chat** tab to return to the full Harness conversation view.
 
 ### Keyboard shortcuts
 
@@ -52,7 +52,6 @@ Restart `dsh web` after first installation and refresh the existing Web GUI. A s
 | --- | --- |
 | `Alt+Shift+V` | Split the active pane vertically |
 | `Alt+Shift+H` | Split the active pane horizontally |
-| `Escape` | Close split-screen mode |
 | `Enter` | Send from the focused composer |
 | `Shift+Enter` | Insert a newline |
 
@@ -77,7 +76,7 @@ The package has two runtime faces:
 
 The browser half uses supported public seams:
 
-- `ctx.slots.inject("shell.overlay", ...)` for an additive full-screen surface.
+- `ctx.slots.inject("conversation.view", ...)` for an additive native conversation tab.
 - `ctx.sessions.list`, `open(id)`, and `binding(id).session` for session discovery, history, streaming, prompts, cancellation, and paging.
 - `ctx.workspaces.list` and `connectWorkspace(id)` for cross-workspace session creation.
 
