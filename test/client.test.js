@@ -133,6 +133,18 @@ test("persisted layouts are validated and bounded", async () => {
   assert.deepEqual(plain(api.sanitizeLayout(duplicate)), { type: "pane", id: "one", sessionId: "s1" });
 });
 
+test("observable adapters preserve method receivers", async () => {
+  const { client } = await loadClient();
+  const api = client.__testing;
+  const observable = {
+    value: 42,
+    getSnapshot() { return this.value; },
+    subscribe(fn) { assert.equal(this, observable); fn(); return () => {}; },
+  };
+  assert.equal(api.observableSnapshot(observable, 0), 42);
+  assert.equal(typeof api.observableSubscribe(observable, () => {}), "function");
+});
+
 test("focused pane persists for native sidebar selection", async () => {
   const { client } = await loadClient();
   const api = client.__testing;
