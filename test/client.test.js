@@ -28,66 +28,218 @@ async function loadClient() {
   assert.equal(definition.id, "@syncended/dsh-split-screen");
   const React = {
     Fragment: Symbol("Fragment"),
-    createElement: (...args) => ({ args }),
+    createElement(type, props, ...children) {
+      return {
+        type,
+        props: {
+          ...(props || {}),
+          children: children.length === 0 ? null : children.length === 1 ? children[0] : children,
+        },
+      };
+    },
+    memo: (component) => component,
     useCallback: (fn) => fn,
     useEffect() {},
+    useLayoutEffect() {},
     useRef: () => ({ current: null }),
     useState: (value) => [typeof value === "function" ? value() : value, () => {}],
     useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(),
   };
+  const primitive = (name) => function Primitive(props) {
+    return React.createElement(name, props, props.children);
+  };
   const client = definition.factory((id) => {
     if (id === "react") return React;
     if (id === "@deepseek-ai/dsh-client-ui-primitives") return {
-      DisclosureRow: function DisclosureRow() {},
-      IconApiOutline14: function IconApiOutline14() {},
-      IconThinkOutline14: function IconThinkOutline14() {},
-      MarkdownText: function MarkdownText() {},
-      MessageText: function MessageText() {},
-      StateDot: function StateDot() {},
+      DisclosureRow: primitive("DisclosureRow"),
+      IconApiOutline14: primitive("IconApiOutline14"),
+      IconThinkOutline14: primitive("IconThinkOutline14"),
+      MarkdownText: primitive("MarkdownText"),
+      MessageText: primitive("MessageText"),
+      StateDot: primitive("StateDot"),
     };
     throw new Error(`Unexpected require: ${id}`);
   });
-  return { client, styles };
+  return { client, styles, storage };
 }
 
 function plain(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function render(node) {
+  if (node == null || node === false || node === true) return null;
+  if (Array.isArray(node)) return node.flatMap((child) => {
+    const rendered = render(child);
+    if (rendered == null) return [];
+    return Array.isArray(rendered) ? rendered : [rendered];
+  });
+  if (typeof node !== "object") return node;
+  if (typeof node.type === "function") return render(node.type(node.props || {}));
+  if (typeof node.type === "symbol") return render(node.props && node.props.children);
+  const { children, ...props } = node.props || {};
+  return { type: node.type, props, children: render(children) };
+}
+
+function findAll(node, predicate, result = []) {
+  if (Array.isArray(node)) {
+    for (const child of node) findAll(child, predicate, result);
+    return result;
+  }
+  if (!node || typeof node !== "object") return result;
+  if (predicate(node)) result.push(node);
+  findAll(node.children, predicate, result);
+  return result;
+}
+
+function findRaw(node, predicate, result = []) {
+  if (Array.isArray(node)) {
+    for (const child of node) findRaw(child, predicate, result);
+    return result;
+  }
+  if (!node || typeof node !== "object") return result;
+  if (predicate(node)) result.push(node);
+  findRaw(node.props && node.props.children, predicate, result);
+  return result;
+}
+
+function byClass(tree, className) {
+  return findAll(tree, (node) => String(node.props && node.props.className || "").split(/\s+/).includes(className));
+}
+
+function byType(tree, type) {
+  return findAll(tree, (node) => node.type === type);
+}
+
+function openSnapshot(overrides = {}) {
+  return {
+    sessionId: "session-a", openState: "open", openError: null, removed: false, running: false,
+    nodes: [], partial: null, pending: [], runningCalls: [], turnTimings: new Map(),
+    hasMore: false, loadingOlder: false, ...overrides,
+  };
+}
+
+function paneProps(session, activeCopy, modelDirectories) {
+  return {
+    node: { type: "pane", id: "pane-a", sessionId: "session-a" },
+    list: { ids: ["session-a"], byId: { "session-a": { id: "session-a", title: "Test session" } } },
+    workspaces: { items: [] }, sessions: { binding: () => ({ session }) }, modelDirectories, active: true, paneCount: 1, activeCopy,
+    onActive() {}, onSplit() {}, onRemove() {}, onReset() {}, onSwap() {}, onOpenMain() {},
+  };
+}
+
 test("client bundle registers and installs its stylesheet", async () => {
   const { client, styles } = await loadClient();
-  assert.deepEqual(Array.from(client.inject), ["slots", "sessions", "workspaces", "locale"]);
+  assert.deepEqual(Array.from(client.inject), ["slots", "sessions", "workspaces", "modelDirectories", "locale"]);
   assert.equal(typeof client.apply, "function");
   assert.equal(styles.length, 1);
   assert.equal(styles[0].dataset.plugin, "@syncended/dsh-split-screen");
   assert.match(styles[0].textContent, /dsh-split-workspace-view/);
-  assert.doesNotMatch(styles[0].textContent, /dsh-split-overlay|dsh-split-launcher/);
+  assert.match(styles[0].textContent, /dsh-split-compose-card/);
+  assert.match(styles[0].textContent, /dsh-split-turn-status/);
+  assert.match(styles[0].textContent, /@container dsh-split-pane/);
+  assert.match(styles[0].textContent, /div\[data-slot="sidebar\.footer\.action"\]:has\(\.dsh-split-sidebar-toggle\) \{ display:flex!important; flex-direction:column/);
+  assert.match(styles[0].textContent, /dsh-split-sidebar-toggle\[data-wide="true"\] \{ width:100%; height:49px/);
+  assert.match(styles[0].textContent, /dsh-split-sidebar-toggle \{[^}]*color:var\(--dsw-alias-label-primary/);
+  assert.doesNotMatch(styles[0].textContent, /dsh-split-overlay|dsh-split-launcher|dsh-split-compose-row/);
 });
 
-test("client contributes one additive conversation view", async () => {
-  const { client } = await loadClient();
-  let slot;
-  let registration;
+test("client toggles a center workspace from the sidebar", async () => {
+  const { client, storage } = await loadClient();
+  const injected = [];
+  const registrations = [];
   let activeLocale = "en";
   const ctx = {
-    sessions: { list: { getSnapshot: () => ({ current: undefined }), subscribe: () => () => {} } },
-    workspaces: {},
+    sessions: { list: { getSnapshot: () => ({ current: undefined, byId: {} }), subscribe: () => () => {} } },
+    workspaces: {}, modelDirectories: {},
     locale: { getLocale: () => ({ active: activeLocale }), getSnapshot: () => ({ active: activeLocale, revision: 0 }), subscribe: () => () => {} },
     effect(factory) { return factory(); },
     slots: {
-      inject(name, factory) { slot = name; return factory(); },
-      register(options, component) { registration = { options, component }; return () => {}; },
+      inject(name, factory) { injected.push(name); return factory(); },
+      register(options, component) {
+        if (options.name === "conversation" && (options.priority ?? 0) === 0) throw new Error("native ConversationRoot already occupies priority 0");
+        const row = { options, component, disposed: false };
+        registrations.push(row);
+        return () => { row.disposed = true; };
+      },
     },
   };
   client.apply(ctx);
-  assert.equal(slot, "conversation.view");
-  assert.equal(registration.options.id, "split-screen");
-  assert.equal(registration.options.name, "conversation.view");
-  assert.equal(registration.options.order, 100);
-  assert.equal(registration.options.label(), "Split");
+  assert.deepEqual(injected, ["conversation", "sidebar.footer.action"]);
+  const action = registrations[0];
+  assert.equal(action.options.name, "sidebar.footer.action");
+  assert.equal(action.options.id, "split-screen");
+  assert.equal(action.options.label(), "Split");
   activeLocale = "zh";
-  assert.equal(registration.options.label(), "分屏");
-  assert.equal(typeof registration.component, "function");
+  assert.equal(action.options.label(), "分屏");
+
+  const toggle = byClass(render({ type: action.component, props: { wide: true } }), "dsh-split-sidebar-toggle")[0];
+  assert.equal(toggle.props["aria-pressed"], false);
+  toggle.props.onClick();
+  assert.equal(storage.get("dsh.split-screen.center-mode.v1"), "true");
+  assert.equal(registrations[1].options.name, "conversation");
+  assert.equal(registrations[1].options.priority, -100);
+  assert.equal(typeof registrations[1].component, "function");
+  toggle.props.onClick();
+  assert.equal(storage.get("dsh.split-screen.center-mode.v1"), "false");
+  assert.equal(registrations[1].disposed, true);
+});
+
+test("center workspace exits back to the active pane native chat", async () => {
+  const { client, storage } = await loadClient();
+  const api = client.__testing;
+  storage.set("dsh.split-screen.layout.v1", JSON.stringify({ type: "pane", id: "pane-b", sessionId: "session-b", tabs: ["session-b"] }));
+  storage.set("dsh.split-screen.active-pane.v1", "pane-b");
+  const opened = [];
+  let exited = 0;
+  const snapshot = openSnapshot({ sessionId: "session-b" });
+  const session = { subscribe: () => () => {}, getSnapshot: () => snapshot, projections: { faceOf: () => ({ subscribe: () => () => {}, getSnapshot: () => undefined }) }, async prompt() { return { ok: true }; }, async cancel() { return { ok: true }; } };
+  const list = { ids: ["session-a", "session-b"], current: "session-a", phase: "ready", byId: { "session-a": { id: "session-a", title: "Alpha" }, "session-b": { id: "session-b", title: "Beta" } } };
+  const sessions = { list: { subscribe: () => () => {}, getSnapshot: () => list }, binding: () => ({ session }), open: (id) => { opened.push(id); list.current = id; } };
+  const workspaces = { list: { subscribe: () => () => {}, getSnapshot: () => ({ items: [] }) } };
+  const locale = { subscribe: () => () => {}, getSnapshot: () => ({ active: "en" }) };
+  const tree = render({ type: api.SplitScreenEntry, props: { sessions, workspaces, locale, sessionId: "session-a", onExit: () => { exited += 1; } } });
+  byClass(tree, "dsh-split-workspace-exit")[0].props.onClick();
+  assert.deepEqual(opened, ["session-b"]);
+  assert.equal(exited, 1);
+});
+
+test("neighbor session updates do not invalidate a focused pane", async () => {
+  const { client } = await loadClient();
+  const api = client.__testing;
+  const node = api.pane("session-a", "pane-a");
+  const ownSummary = { id: "session-a", title: "Alpha" };
+  const before = {
+    node, active: true, paneCount: 2, workspaces: {}, sessions: {}, modelDirectories: {}, activeCopy: api.copy("en"),
+    list: { ids: ["session-a", "session-b"], byId: { "session-a": ownSummary, "session-b": { id: "session-b", running: true } } },
+  };
+  const neighborSettled = {
+    ...before,
+    list: { ids: ["session-a", "session-b"], byId: { "session-a": ownSummary, "session-b": { id: "session-b", running: false } } },
+  };
+  assert.equal(api.equalPaneProps(before, neighborSettled), true);
+  assert.equal(api.equalPaneProps(before, { ...neighborSettled, list: { ...neighborSettled.list, byId: { ...neighborSettled.list.byId, "session-a": { ...ownSummary, title: "Renamed" } } } }), false);
+  assert.equal(api.equalPaneProps(before, { ...neighborSettled, active: false }), false);
+});
+
+test("composer focus and caret survive a textarea remount", async () => {
+  const { client } = await loadClient();
+  const api = client.__testing;
+  const body = {};
+  const documentElement = {};
+  const ownerDocument = { body, documentElement, activeElement: body };
+  const previous = { value: "hello", selectionStart: 2, selectionEnd: 4, selectionDirection: "forward" };
+  api.rememberComposerFocus("pane-a:session-a", previous);
+  const restored = {
+    ownerDocument, value: "hello",
+    focus() { ownerDocument.activeElement = this; },
+    setSelectionRange(start, end, direction) { this.selection = [start, end, direction]; },
+  };
+  assert.equal(api.restoreComposerFocus("pane-a:session-a", restored), true);
+  assert.deepEqual(restored.selection, [2, 4, "forward"]);
+  api.releaseComposerFocus("pane-a:session-a");
+  ownerDocument.activeElement = body;
+  assert.equal(api.restoreComposerFocus("pane-a:session-a", restored), false);
 });
 
 test("layout tree supports nested splits, resize, remove, and session swap", async () => {
@@ -103,6 +255,15 @@ test("layout tree supports nested splits, resize, remove, and session swap", asy
   assert.equal(nested.direction, "row");
   assert.equal(nested.second.direction, "column");
 
+  const tabbed = api.setPaneSession(nested, "pane-b", "session-d");
+  assert.deepEqual(plain(tabbed.second.first.tabs), ["session-b", "session-d"]);
+  assert.equal(tabbed.second.first.sessionId, "session-d");
+  assert.equal(api.paneForSession(tabbed, "session-d"), "pane-b");
+  assert.equal(api.sessionForPane(tabbed, "pane-b"), "session-d");
+  const closed = api.closePaneSession(tabbed, "pane-b", "session-d");
+  assert.equal(closed.second.first.sessionId, "session-b");
+  assert.deepEqual(plain(closed.second.first.tabs), ["session-b"]);
+
   const resized = api.setSplitRatio(nested, nested.id, 0.01);
   assert.equal(resized.ratio, 0.15);
   const swapped = api.swapPaneSessions(resized, "pane-a", "pane-c");
@@ -111,6 +272,34 @@ test("layout tree supports nested splits, resize, remove, and session swap", asy
   const removed = api.removePane(swapped, "pane-b");
   assert.equal(api.countPanes(removed), 2);
   assert.deepEqual(Array.from(api.paneIds(removed)), ["pane-a", "pane-c"]);
+});
+
+test("pane-local chat tabs render and dispatch selection independently", async () => {
+  const { client } = await loadClient();
+  const api = client.__testing;
+  const node = api.setPaneSession(api.pane("session-a", "pane-a"), "pane-a", "session-b");
+  const list = {
+    ids: ["session-a", "session-b", "session-c"],
+    byId: {
+      "session-a": { id: "session-a", title: "Alpha" },
+      "session-b": { id: "session-b", title: "Beta", running: true },
+      "session-c": { id: "session-c", title: "Gamma" },
+    },
+  };
+  const selected = [];
+  const closed = [];
+  const tree = render({ type: api.PaneTabs, props: {
+    node, list, activeState: "running", activeCopy: api.copy("en"),
+    onSelect: (id) => selected.push(id), onClose: (id) => closed.push(id), onAdd() {},
+  } });
+  assert.deepEqual(byClass(tree, "dsh-split-tab-label").map((row) => row.children), ["Alpha", "Beta"]);
+  assert.equal(byClass(tree, "dsh-split-tab")[1].props["data-active"], true);
+  byClass(tree, "dsh-split-tab-main")[0].props.onClick();
+  byClass(tree, "dsh-split-tab-main")[0].props.onKeyDown({ key: "ArrowRight", preventDefault() {} });
+  byClass(tree, "dsh-split-tab-close")[1].props.onClick({ stopPropagation() {} });
+  assert.deepEqual(selected, ["session-a", "session-b"]);
+  assert.deepEqual(closed, ["session-b"]);
+  assert.equal(byClass(tree, "dsh-split-tab-add").length, 1);
 });
 
 test("persisted layouts are validated and bounded", async () => {
@@ -127,10 +316,12 @@ test("persisted layouts are validated and bounded", async () => {
   assert.deepEqual(plain(api.sanitizeLayout(valid)), {
     ...valid,
     ratio: 0.85,
+    first: { ...valid.first, tabs: ["s1"] },
+    second: { ...valid.second, tabs: ["s2"] },
   });
   assert.equal(api.sanitizeLayout({ type: "other" }), null);
   const duplicate = { ...valid, second: { type: "pane", id: "one", sessionId: "s2" } };
-  assert.deepEqual(plain(api.sanitizeLayout(duplicate)), { type: "pane", id: "one", sessionId: "s1" });
+  assert.deepEqual(plain(api.sanitizeLayout(duplicate)), { type: "pane", id: "one", sessionId: "s1", tabs: ["s1"] });
 });
 
 test("observable adapters preserve method receivers", async () => {
@@ -174,8 +365,218 @@ test("compact transcript projection keeps chat, tool, and failure rows", async (
   assert.deepEqual(plain(api.projectNode({ kind: "assistant", seq: 3, blocks: [{ kind: "text", text: "done" }] }, copy)), {
     role: "assistant", label: "Agent", reasoningLabel: "Reasoning", imageLabel: "[Image]", text: "done", blocks: [{ kind: "text", text: "done" }], key: "assistant-3",
   });
-  assert.deepEqual(plain(api.projectNode({ kind: "tool-result", seq: 4, callId: "c1", call: { name: "bash" }, content: [{ type: "text", text: "ok" }], isError: false }, copy)), {
-    role: "tool", label: "Tool", text: "✓ bash\nok", key: "tool-4",
+  const toolNode = { kind: "tool-result", seq: 4, callId: "c1", call: { name: "bash" }, content: [{ type: "text", text: "ok" }], isError: false };
+  assert.deepEqual(plain(api.projectNode(toolNode, copy)), {
+    role: "tool", label: "Tool", text: "✓ bash\nok", tool: toolNode, key: "tool-4",
   });
   assert.equal(api.projectNode({ kind: "unknown", seq: 5 }, copy), null);
+  assert.deepEqual(plain(api.projectNode({ kind: "assistant", seq: 6, blocks: [], interrupted: true }, copy)), {
+    role: "assistant", label: "Agent", reasoningLabel: "Reasoning", imageLabel: "[Image]", text: "Stopped", blocks: [],
+    interrupted: true, interruptedLabel: "Stopped", key: "assistant-6",
+  });
+});
+
+test("native-style activity labels and durations stay compact and localized", async () => {
+  const { client } = await loadClient();
+  const api = client.__testing;
+  assert.equal(api.displayToolTitle("bash"), "Bash");
+  assert.equal(api.displayToolTitle("ask_user_question"), "Question");
+  assert.equal(api.displayToolTitle("custom_tool"), "Custom Tool");
+  assert.equal(api.formatRunDuration(14_000, { durationSeconds: "{seconds}s", durationMinutes: "{minutes}m {seconds}s" }), "14s");
+  assert.equal(api.formatRunDuration(84_000, { durationSeconds: "{seconds} с", durationMinutes: "{minutes} мин {seconds} с" }), "1 мин 24 с");
+  assert.equal(api.formatRunDuration(84_000, { durationSeconds: "{seconds}秒", durationMinutes: "{minutes}分{seconds}秒" }), "1分24秒");
+  const toolCopy = { tool: "Tool", toolRunning: "Running", toolDone: "Completed", toolFailed: "Failed", image: "[Image]" };
+  const running = api.toolPresentation({ callId: "r1", name: "bash", argsRaw: "npm test", subCalls: [] }, true, toolCopy);
+  assert.equal(running.summary, "npm test");
+  assert.equal(running.input, "", "one-line input must not repeat inside details");
+  const settled = api.toolPresentation({
+    kind: "tool-result", callId: "r1", call: { name: "bash", argsRaw: "npm test" }, content: [{ type: "text", text: "ok" }], isError: false,
+    callView: null, resultView: null, subCalls: [],
+  }, false, toolCopy);
+  assert.equal(settled.summary, "ok");
+  assert.equal(settled.output, "", "one-line output must not repeat inside details");
+  assert.equal(settled.input, "npm test");
+});
+
+test("keyed chat order interleaves running, nested, and settled tool calls", async () => {
+  const { client } = await loadClient();
+  const api = client.__testing;
+  const running = {
+    callId: "bash-root", name: "bash", argsRaw: "{\"command\":\"build\"}", callView: null,
+    subCalls: [{
+      callId: "read-child", name: "read", argsRaw: "{\"file_path\":\"package.json\"}", callView: null,
+      subCalls: [{ callId: "grep-grandchild", name: "grep", argsRaw: "{\"pattern\":\"scripts\"}", callView: null, subCalls: [] }],
+    }],
+  };
+  const settled = {
+    kind: "tool-result", seq: 9, callId: "write-root", call: { name: "write", argsRaw: "{\"file_path\":\"out.txt\"}" },
+    content: [{ type: "text", text: "write failed" }], isError: true, error: { name: "WriteError", code: "EWRITE" }, callView: null, resultView: null, subCalls: [],
+  };
+  const nodes = new Map([
+    ["tool:running", { key: "tool:running", kind: "tool-call", anchorSeq: 4, visibility: "visible", data: { root: running } }],
+    ["tool:settled", { key: "tool:settled", kind: "tool-call", anchorSeq: 8, visibility: "visible", data: { root: settled } }],
+  ]);
+  const snapshot = {
+    openState: "open", openError: null, running: true, hasMore: false, loadingOlder: false,
+    chat: { order: ["tool:running", "tool:settled"], nodes, timeline: { turns: new Map() } },
+    nodes: [settled], partial: null, runningCalls: [running], turnTimings: new Map(),
+  };
+
+  const items = api.orderedConversationItems(snapshot);
+  assert.deepEqual(items.map((item) => item.key), ["tool:running", "tool:settled"]);
+  assert.equal(items[0].tool.subCalls[0].callId, "read-child");
+
+  const tree = render({ type: api.MessageList, props: { session: {}, snapshot, activeCopy: api.copy("en") } });
+  assert.deepEqual(byType(tree, "DisclosureRow").map((row) => row.props.title), ["Bash", "Read", "Grep", "Write"]);
+  assert.deepEqual(byClass(tree, "dsh-split-tool").map((row) => row.props["data-chat-call-id"]), ["bash-root", "read-child", "grep-grandchild", "write-root"]);
+  assert.equal(byClass(tree, "dsh-split-turn-status").length, 1);
+  assert.equal(byClass(tree, "dsh-split-empty").length, 0);
+});
+
+test("keyed interrupted assistant renders a compact stopped badge", async () => {
+  const { client } = await loadClient();
+  const api = client.__testing;
+  const interrupted = {
+    key: "assistant:stopped", kind: "assistant-step", anchorSeq: 11, visibility: "visible",
+    data: { status: "interrupted", turn: 1, step: 2, blocks: [] },
+  };
+  const snapshot = {
+    openState: "open", openError: null, running: false, hasMore: false, loadingOlder: false,
+    chat: { order: [interrupted.key], nodes: new Map([[interrupted.key, interrupted]]), timeline: { turns: new Map() } },
+    nodes: [], partial: null, runningCalls: [], turnTimings: new Map(),
+  };
+  const tree = render({ type: api.MessageList, props: { session: {}, snapshot, activeCopy: api.copy("en") } });
+  const badges = byClass(tree, "dsh-split-message-stopped");
+  assert.equal(badges.length, 1);
+  assert.equal(badges[0].children, "Response stopped");
+  assert.equal(byClass(tree, "dsh-split-empty").length, 0);
+});
+
+test("pane composer switches between queued Send and Stop controls", async () => {
+  const { client, storage } = await loadClient();
+  const api = client.__testing;
+  storage.set("dsh.split-screen.drafts.v1", JSON.stringify({ "pane-a:session-a": "  hello agent  " }));
+  let snapshot = openSnapshot();
+  const promptCalls = [];
+  let cancelCalls = 0;
+  const session = {
+    subscribe: () => () => {}, getSnapshot: () => snapshot,
+    async prompt(content, placement) { promptCalls.push({ content, placement }); return { ok: true }; },
+    async cancel() { cancelCalls += 1; return { ok: true }; },
+  };
+  const props = paneProps(session, api.copy("en"));
+
+  let tree = render({ type: api.PaneView, props });
+  let control = byClass(tree, "dsh-split-send")[0];
+  assert.equal(control.props.type, "submit");
+  assert.equal(control.props["aria-label"], "Send");
+  assert.equal(control.props["data-stop"], undefined);
+  assert.equal(control.props.disabled, false);
+  byClass(tree, "dsh-split-compose")[0].props.onSubmit({ preventDefault() {} });
+  assert.deepEqual(plain(promptCalls), [{ content: [{ type: "text", text: "hello agent" }], placement: "queue" }]);
+
+  snapshot = openSnapshot({ running: true });
+  tree = render({ type: api.PaneView, props });
+  control = byClass(tree, "dsh-split-send")[0];
+  assert.equal(control.props.type, "button");
+  assert.equal(control.props["aria-label"], "Stop");
+  assert.equal(control.props["data-stop"], true);
+  assert.equal(control.props.disabled, false);
+  control.props.onClick();
+  assert.equal(cancelCalls, 1);
+});
+
+test("empty draft disables Send without disabling Stop", async () => {
+  const { client } = await loadClient();
+  const api = client.__testing;
+  let snapshot = openSnapshot();
+  const session = { subscribe: () => () => {}, getSnapshot: () => snapshot, async prompt() {}, async cancel() {} };
+  const props = paneProps(session, api.copy("en"));
+  let control = byClass(render({ type: api.PaneView, props }), "dsh-split-send")[0];
+  assert.equal(control.props.disabled, true);
+  snapshot = openSnapshot({ running: true });
+  control = byClass(render({ type: api.PaneView, props }), "dsh-split-send")[0];
+  assert.equal(control.props.disabled, false);
+  assert.equal(control.props["data-stop"], true);
+});
+
+test("session metrics include context, throughput, token usage, and cache rate", async () => {
+  const { client } = await loadClient();
+  const api = client.__testing;
+  const segments = api.statsSegments(
+    { turns: 2, steps: 3, decodeMs: 1000, decodeTokens: 40 },
+    { uncachedInputTokens: 100, cacheReadTokens: 300, cacheWriteTokens: 0, outputTokens: 50 },
+    { projectedTokens: 32768, contextWindow: 65536 },
+    api.copy("en"),
+  );
+  assert.deepEqual(plain(segments), ["Context 50% · 32.8K/65.5K", "2 turns · 3 steps", "40 tok/s", "Input 400 · Output 50", "cache 75%"]);
+  assert.deepEqual(plain(api.contextOccupancy({ pressureTokens: 10, contextWindow: 40 })), { usedTokens: 10, contextWindow: 40, percent: 25 });
+});
+
+test("pane exposes functional access and model selectors", async () => {
+  const { client } = await loadClient();
+  const api = client.__testing;
+  const projectionValues = {
+    permissions: {
+      currentValue: "workspace-write",
+      options: [
+        { value: "read-only", name: "read-only" },
+        { value: "workspace-write", name: "workspace-write" },
+        { value: "danger-full-access", name: "danger-full-access" },
+      ],
+    },
+    contextPressure: { projectedTokens: 24000, contextWindow: 120000 },
+    sessionStats: { turns: 1, steps: 2, decodeMs: 2000, decodeTokens: 50 },
+    tokenUsage: { uncachedInputTokens: 1000, cacheReadTokens: 3000, cacheWriteTokens: 0, outputTokens: 500 },
+  };
+  const commandCalls = [];
+  const modelCalls = [];
+  const session = {
+    subscribe: () => () => {}, getSnapshot: () => openSnapshot(),
+    projections: { faceOf: (key) => ({ subscribe: () => () => {}, getSnapshot: () => projectionValues[key] }) },
+    async prompt() { return { ok: true }; }, async cancel() { return { ok: true }; },
+    async command(line) { commandCalls.push(line); return { ok: true, value: { matched: true } }; },
+  };
+  const modelState = {
+    current: { provider: "deepseek", model: "v3" }, routable: true, status: "ready", error: null, failures: [],
+    groups: [{ id: "deepseek", name: "DeepSeek", models: [{ id: "v3", name: "V3" }, { id: "r1", name: "R1", reasoning: { defaultEffort: "high" } }] }],
+  };
+  const modelDirectories = {
+    directoryFor: () => ({
+      store: { subscribe: () => () => {}, getSnapshot: () => modelState },
+      async load() {}, async select(selection) { modelCalls.push(selection); },
+    }),
+  };
+  const props = paneProps(session, api.copy("en"), modelDirectories);
+  const tree = render({ type: api.PaneView, props });
+  const selectors = byClass(tree, "dsh-split-control-selector");
+  const permission = selectors.find((node) => node.props["data-kind"] === "permission");
+  const model = selectors.find((node) => node.props["data-kind"] === "model");
+  assert.ok(permission);
+  assert.ok(model);
+  assert.equal(byType(tree, "select").length, 0);
+  assert.equal(byClass(permission, "dsh-split-control-icon").length, 1);
+  assert.equal(byClass(model, "dsh-split-control-icon").length, 1);
+  assert.equal(byClass(permission, "dsh-split-control-label")[0].children, "Workspace Write");
+  assert.equal(byClass(model, "dsh-split-control-label")[0].children, "V3");
+  const contextTrigger = byClass(tree, "dsh-split-context-trigger")[0];
+  assert.equal(contextTrigger.props["aria-haspopup"], "dialog");
+  assert.equal(contextTrigger.props["aria-expanded"], false);
+  const contextProgress = findAll(contextTrigger, (node) => node.props && node.props.role === "progressbar")[0];
+  assert.equal(contextProgress.props["aria-valuenow"], 20);
+  assert.equal(contextProgress.props["aria-valuemin"], 0);
+  assert.equal(contextProgress.props["aria-valuemax"], 100);
+  assert.equal(byClass(contextTrigger, "dsh-split-context-label")[0].children, "20%");
+  const contextOpen = render({ type: api.ContextControl, props: { context: api.contextOccupancy(projectionValues.contextPressure), activeCopy: api.copy("en"), initiallyOpen: true } });
+  assert.equal(byClass(contextOpen, "dsh-split-context-popover").length, 1);
+  assert.deepEqual(byClass(contextOpen, "dsh-split-context-rows")[0].children.map((node) => node.children), ["Used", "24K", "Remaining", "96K", "Limit", "120K"]);
+  assert.deepEqual(byClass(tree, "dsh-split-stat").map((node) => node.children), ["Context 20% · 24K/120K", "1 turns · 2 steps", "25 tok/s", "Input 4K · Output 500", "cache 75%"]);
+
+  const rawPane = api.PaneView(props);
+  const rawControls = findRaw(rawPane, (node) => node.type === api.ComposerControls)[0];
+  await rawControls.props.onPermission("read-only");
+  await rawControls.props.onPermission("danger-full-access");
+  await rawControls.props.onModel("deepseek\u0000r1");
+  assert.deepEqual(commandCalls, ["/permission read-only"], "Full access must fail closed when confirmation is unavailable");
+  assert.deepEqual(plain(modelCalls), [{ provider: "deepseek", model: "r1", reasoningEffort: "high" }]);
 });

@@ -1,7 +1,7 @@
 {
   "name": "@syncended/dsh-split-screen",
-  "version": "0.3.1",
-  "description": "iTerm-style split-screen session manager for the DeepSeek Harness Web GUI.",
+  "version": "0.4.0",
+  "description": "iTerm-style multi-chat center workspace for the DeepSeek Harness Web GUI.",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
@@ -31,7 +31,9 @@
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-layout",
         "@deepseek-ai/dsh-client-ui-conversation",
-        "@deepseek-ai/dsh-client-ui-primitives"
+        "@deepseek-ai/dsh-client-ui-model-selection",
+        "@deepseek-ai/dsh-client-ui-primitives",
+        "@deepseek-ai/dsh-client-ui-sidebar"
       ],
       "platform": "web"
     }
@@ -42,7 +44,9 @@
     "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-client-ui-layout": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-client-ui-conversation": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-model-selection": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-client-ui-primitives": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-sidebar": "^0.1.0-rc.6",
     "react": "^18.2.0"
   },
   "engines": {
