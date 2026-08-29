@@ -2,6 +2,10 @@
 
 An iTerm-style session multiplexer for the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web GUI. It puts several Harness sessions on one screen and lets each pane point at a different workspace.
 
+<p align="center">
+  <img src="./docs/assets/split-screen.png" width="920" alt="Dark-theme DeepSeek Harness Split workspace with nested vertical and horizontal panes" />
+</p>
+
 ## Features
 
 - Nested **vertical** (side-by-side) and **horizontal** (stacked) splits.
@@ -18,9 +22,15 @@ An iTerm-style session multiplexer for the [DeepSeek Harness](https://github.com
 - Layout, split ratios, pane order, selected session ids, and unsent pane drafts persist in browser `localStorage`.
 - English, Russian, and Chinese UI tied to the Harness locale, dark-theme token compatibility, and keyboard controls.
 
+## Requirements
+
+- DeepSeek Harness `0.1.0-rc.6` or compatible.
+- The Web profile (`dsh web`).
+- Node.js 18 or newer.
+
 ## Install
 
-From npm after publication:
+Install from npm:
 
 ```bash
 dsh plugin --profile web add @syncended/dsh-split-screen
@@ -29,16 +39,26 @@ dsh plugin --profile web add @syncended/dsh-split-screen
 From this checkout during development:
 
 ```bash
-dsh plugin --profile web add /home/syncended/deepseek-harness-split-screen
+dsh plugin --profile web add /absolute/path/to/deepseek-harness-split-screen
 ```
 
 Some pnpm-backed profiles require the workspace-root flag:
 
 ```bash
-dsh plugin --profile web add -w /home/syncended/deepseek-harness-split-screen
+dsh plugin --profile web add -w /absolute/path/to/deepseek-harness-split-screen
 ```
 
-Restart `dsh web` after first installation and refresh the existing Web GUI. A **Split** action appears in the native sidebar footer.
+The package declares a DSH bundle; no manual plugin entry is required. Restart `dsh web` after installing or upgrading and refresh the existing Web GUI. A **Split** action appears in the native sidebar footer.
+
+No environment variables, remote URL, or separate connection are required. Panes can use only sessions exposed by the same `dsh web` Host and profile.
+
+To remove the plugin:
+
+```bash
+dsh plugin --profile web remove @syncended/dsh-split-screen
+```
+
+Restart the Host after removal.
 
 ## Usage
 
@@ -58,11 +78,13 @@ Restart `dsh web` after first installation and refresh the existing Web GUI. A *
 | `Enter` | Send from the focused composer |
 | `Shift+Enter` | Insert a newline |
 
-## Workspace behavior
+## Workspace and persistence behavior
 
 A single `dsh web` Host exposes all workspaces registered in that profile. The plugin can mix their sessions freely in one layout; panes do not have to share a cwd or repository.
 
 This version does **not** aggregate sessions from separate DSH server processes or different remote URLs. Those are separate Hosts and would require a multi-connection runtime rather than a client layout plugin.
+
+Layout and drafts are scoped to the current browser origin and profile. Use **Reset layout** to clear the saved arrangement. Clearing the site's browser storage also removes the layout and unsent pane drafts.
 
 ## Development
 
@@ -85,7 +107,7 @@ The browser half uses supported public seams:
 - `ctx.modelDirectories.directoryFor(id)` for the shared per-session model catalog and selection state.
 - `ctx.workspaces.list` for native workspace and session labeling.
 
-The layout is a persisted binary tree. Split nodes own direction and ratio; leaf nodes own stable pane ids and optional session ids. Removing a leaf collapses its parent, while header drag-and-drop swaps leaf session assignments without rebuilding the tree.
+The layout is a persisted binary tree. Split nodes own direction and ratio; leaf nodes own stable pane IDs and pane-local tab stacks. Removing a leaf collapses its parent, while header drag-and-drop swaps complete pane tab stacks without rebuilding the tree.
 
 ## Current limitations
 
@@ -94,12 +116,6 @@ The layout is a persisted binary tree. Split nodes own direction and ratio; leaf
 - Skills, slash-command insertion, and the rich `+` menu intentionally stay in native Chat to keep small panes compact.
 - Attachments can be represented in history, but this version sends text prompts only.
 - Browser persistence is local to the current origin/profile.
-
-## Requirements
-
-- DeepSeek Harness `0.1.0-rc.6` or compatible.
-- The Web profile (`dsh web`).
-- Node.js 18 or newer.
 
 ## License
 
