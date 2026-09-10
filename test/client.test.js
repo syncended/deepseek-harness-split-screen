@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
 
-async function loadClient() {
+async function loadClient({ useSyncExternalStore, primitiveOverrides = {} } = {}) {
   let definition;
   const styles = [];
   const storage = new Map();
@@ -29,6 +29,7 @@ async function loadClient() {
   const React = {
     Fragment: Symbol("Fragment"),
     createElement(type, props, ...children) {
+      assert.ok(type, "React element type must not be undefined or null");
       return {
         type,
         props: {
@@ -43,9 +44,14 @@ async function loadClient() {
     useLayoutEffect() {},
     useRef: () => ({ current: null }),
     useState: (value) => [typeof value === "function" ? value() : value, () => {}],
-    useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(),
+    useSyncExternalStore: useSyncExternalStore || ((_subscribe, getSnapshot) => getSnapshot()),
   };
   const primitive = (name) => function Primitive(props) {
+    if (name === "MarkdownText") {
+      assert.equal(typeof props.labels.code.copyLabel, "string");
+      assert.equal(typeof props.labels.code.copiedLabel, "string");
+      assert.equal(typeof props.labels.footnotes, "string");
+    }
     return React.createElement(name, props, props.children);
   };
   const client = definition.factory((id) => {
@@ -57,6 +63,7 @@ async function loadClient() {
       MarkdownText: primitive("MarkdownText"),
       MessageText: primitive("MessageText"),
       StateDot: primitive("StateDot"),
+      ...primitiveOverrides,
     };
     throw new Error(`Unexpected require: ${id}`);
   });
@@ -144,7 +151,8 @@ test("client bundle registers and installs its stylesheet", async () => {
   assert.doesNotMatch(styles[0].textContent, /dsh-split-overlay|dsh-split-launcher|dsh-split-compose-row/);
 });
 
-test("client toggles a center workspace from the sidebar", async () => {
+for (const centerSlot of ["main.conversation", "conversation"]) {
+ test(`client toggles ${centerSlot} from the sidebar`, async () => {
   const { client, storage } = await loadClient();
   const injected = [];
   const registrations = [];
@@ -155,9 +163,14 @@ test("client toggles a center workspace from the sidebar", async () => {
     locale: { getLocale: () => ({ active: activeLocale }), getSnapshot: () => ({ active: activeLocale, revision: 0 }), subscribe: () => () => {} },
     effect(factory) { return factory(); },
     slots: {
-      inject(name, factory) { injected.push(name); return factory(); },
+      inject(name, factory) {
+        injected.push(name);
+        if (name === centerSlot || name === "sidebar.footer.action") return factory();
+        return () => {};
+      },
       register(options, component) {
-        if (options.name === "conversation" && (options.priority ?? 0) === 0) throw new Error("native ConversationRoot already occupies priority 0");
+        if (options.name !== centerSlot && options.name !== "sidebar.footer.action") throw new Error("slot is not declared");
+        if (options.name === centerSlot && (options.priority ?? 0) === 0) throw new Error("native ConversationRoot already occupies priority 0");
         const row = { options, component, disposed: false };
         registrations.push(row);
         return () => { row.disposed = true; };
@@ -165,7 +178,7 @@ test("client toggles a center workspace from the sidebar", async () => {
     },
   };
   client.apply(ctx);
-  assert.deepEqual(injected, ["conversation", "sidebar.footer.action"]);
+  assert.deepEqual(injected, ["main.conversation", "conversation", "sidebar.footer.action"]);
   const action = registrations[0];
   assert.equal(action.options.name, "sidebar.footer.action");
   assert.equal(action.options.id, "split-screen");
@@ -177,12 +190,66 @@ test("client toggles a center workspace from the sidebar", async () => {
   assert.equal(toggle.props["aria-pressed"], false);
   toggle.props.onClick();
   assert.equal(storage.get("dsh.split-screen.center-mode.v1"), "true");
-  assert.equal(registrations[1].options.name, "conversation");
+  assert.equal(registrations[1].options.name, centerSlot);
   assert.equal(registrations[1].options.priority, -100);
   assert.equal(typeof registrations[1].component, "function");
   toggle.props.onClick();
   assert.equal(storage.get("dsh.split-screen.center-mode.v1"), "false");
   assert.equal(registrations[1].disposed, true);
+ });
+}
+
+test("saved split mode follows slot declarations and prefers the current slot", async () => {
+  const { client, storage } = await loadClient();
+  storage.set("dsh.split-screen.center-mode.v1", "true");
+  const declarations = new Map();
+  const registrations = [];
+  const effects = [];
+  const ctx = {
+    sessions: {}, workspaces: {}, modelDirectories: {},
+    locale: { getLocale: () => ({ active: "en" }) },
+    effect(factory) { const dispose = factory(); effects.push(dispose); return dispose; },
+    slots: {
+      inject(name, factory) {
+        const declaration = { factory, dispose: null };
+        declarations.set(name, declaration);
+        return () => declaration.dispose?.();
+      },
+      register(options, component) {
+        const row = { options, component, disposed: false };
+        registrations.push(row);
+        return () => { row.disposed = true; };
+      },
+    },
+  };
+  const declare = (name) => {
+    const declaration = declarations.get(name);
+    declaration.dispose = declaration.factory();
+  };
+  const withdraw = (name) => {
+    const declaration = declarations.get(name);
+    declaration.dispose();
+    declaration.dispose = null;
+  };
+  const mounted = () => registrations.filter((row) => !row.disposed).map((row) => row.options.name);
+  client.apply(ctx);
+  assert.deepEqual(mounted(), []);
+  declare("conversation");
+  assert.deepEqual(mounted(), ["conversation"]);
+  declare("main.conversation");
+  assert.deepEqual(mounted(), ["main.conversation"]);
+  withdraw("conversation");
+  assert.deepEqual(mounted(), ["main.conversation"]);
+  withdraw("main.conversation");
+  assert.deepEqual(mounted(), []);
+  assert.equal(storage.get("dsh.split-screen.center-mode.v1"), "true");
+  declare("main.conversation");
+  declare("conversation");
+  assert.deepEqual(mounted(), ["main.conversation"]);
+  const registrationsBeforeDisposal = registrations.length;
+  for (const dispose of effects.reverse()) dispose();
+  assert.deepEqual(mounted(), []);
+  assert.equal(registrations.length, registrationsBeforeDisposal, "teardown must not remount a fallback slot");
 });
 
 test("center workspace exits back to the active pane native chat", async () => {
@@ -450,6 +517,107 @@ test("keyed interrupted assistant renders a compact stopped badge", async () => 
   assert.equal(badges.length, 1);
   assert.equal(badges[0].children, "Response stopped");
   assert.equal(byClass(tree, "dsh-split-empty").length, 0);
+});
+
+test("populated transcripts support current primitives without MessageText and with required Markdown labels", async () => {
+  const { client } = await loadClient({ primitiveOverrides: { MessageText: undefined } });
+  const api = client.__testing;
+  const userText = "<script>not markup</script>\nplain user text";
+  const markdown = "```js\nconsole.log('hello');\n```\nFootnote[^1]\n\n[^1]: A note";
+  const snapshot = openSnapshot({
+    nodes: [
+      { kind: "user", seq: 1, content: [{ type: "text", text: userText }] },
+      { kind: "assistant", seq: 2, blocks: [{ kind: "text", text: markdown }] },
+    ],
+    partial: { turn: 2, step: 1, blocks: [{ kind: "text", text: markdown }] },
+  });
+  for (const locale of ["en", "ru", "zh"]) {
+    const tree = render({ type: api.MessageList, props: { session: {}, snapshot, activeCopy: api.copy(locale) } });
+    const user = byClass(tree, "dsh-split-message").find((node) => node.props["data-role"] === "user");
+    assert.equal(user.children, userText, "fallback renders escaped text, not HTML or Markdown");
+    assert.equal(byType(tree, "MessageText").length, 0);
+    const markdownNodes = byType(tree, "MarkdownText");
+    assert.equal(markdownNodes.length, 2);
+    assert.deepEqual(markdownNodes.map((node) => node.props.streaming), [false, true]);
+    for (const node of markdownNodes) {
+      assert.equal(node.props.text, markdown);
+      assert.equal(node.props.labels, api.copy(locale).markdownLabels, "localized labels have stable identity");
+    }
+  }
+});
+
+test("pane subscribes to the separate Chat target with lifecycle-only Session snapshots", async () => {
+  const cleanups = [];
+  const { client } = await loadClient({
+    useSyncExternalStore(subscribe, getSnapshot) {
+      cleanups.push(subscribe(() => {}));
+      const value = getSnapshot();
+      assert.equal(getSnapshot(), value, "external snapshots must retain identity between updates");
+      return value;
+    },
+  });
+  const api = client.__testing;
+  const lifecycle = {
+    sessionId: "session-a", openState: "open", openError: null, removed: false,
+    running: false, queue: [], pendingSubmissions: [], hasMore: false, loadingOlder: false,
+  };
+  const session = { sessionId: "session-a", subscribe: () => () => {}, getSnapshot: () => lifecycle };
+  let chat;
+  let subscriptions = 0;
+  let releases = 0;
+  const makeChat = (text) => ({
+    order: ["user:1"],
+    nodes: new Map([["user:1", { key: "user:1", kind: "user", data: { kind: "user", seq: 1, content: [{ type: "text", text }] } }]]),
+    timeline: { turns: new Map() },
+  });
+  const target = {
+    subscribe() {
+      subscriptions += 1;
+      // Installed DSH activates the target on its first subscription.
+      chat ||= makeChat("Separate chat target");
+      return () => { releases += 1; };
+    },
+    getSnapshot: () => chat,
+  };
+  const uiConversation = { binding(id) {
+    assert.equal(id, "session-a");
+    return { target(name) { assert.equal(name, "chat"); return target; } };
+  } };
+  const props = { ...paneProps(session, api.copy("en")), uiConversation };
+  let tree = render({ type: api.PaneView, props });
+  assert.equal(byType(tree, "MessageText")[0].props.text, "Separate chat target");
+  assert.equal(byClass(tree, "dsh-split-empty").length, 0);
+  assert.equal(byType(tree, "textarea")[0].props.disabled, false, "lifecycle fields remain available");
+  chat = makeChat("Updated target, unchanged lifecycle");
+  tree = render({ type: api.PaneView, props });
+  assert.equal(byType(tree, "MessageText")[0].props.text, "Updated target, unchanged lifecycle");
+  assert.equal(subscriptions, 2);
+  const list = { ...props.list, current: "session-a" };
+  const workspaces = { items: [] };
+  tree = render({ type: api.SplitScreenEntry, props: {
+    sessions: { ...props.sessions, list: { subscribe: () => () => {}, getSnapshot: () => list } },
+    workspaces: { list: { subscribe: () => () => {}, getSnapshot: () => workspaces } },
+    uiConversation,
+    onExit() {},
+  } });
+  assert.equal(byType(tree, "MessageText")[0].props.text, "Updated target, unchanged lifecycle", "entry forwards assembly through the pane tree");
+  assert.equal(subscriptions, 3);
+  assert.equal(api.equalPaneProps(props, { ...props }), true);
+  assert.equal(api.equalPaneProps(props, { ...props, uiConversation: {} }), false);
+  for (const cleanup of cleanups) cleanup();
+  assert.equal(releases, 3);
+});
+
+test("pane preserves legacy transcripts when Chat assembly is absent or not yet published", async () => {
+  const { client } = await loadClient();
+  const api = client.__testing;
+  const snapshot = openSnapshot({ nodes: [{ kind: "user", seq: 1, content: [{ type: "text", text: "Legacy transcript" }] }] });
+  const session = { sessionId: "session-a", subscribe: () => () => {}, getSnapshot: () => snapshot };
+  for (const uiConversation of [undefined, { binding: () => ({ target: () => ({ subscribe: () => () => {}, getSnapshot: () => undefined }) }) }]) {
+    const props = { ...paneProps(session, api.copy("en")), uiConversation };
+    const tree = render({ type: api.PaneView, props });
+    assert.equal(byType(tree, "MessageText")[0].props.text, "Legacy transcript");
+  }
 });
 
 test("pane composer switches between queued Send and Stop controls", async () => {

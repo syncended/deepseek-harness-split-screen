@@ -101,9 +101,10 @@ The package has two runtime faces:
 
 The browser half uses supported public seams:
 
-- A dynamically registered `conversation` occupant for the center workspace; disposing it restores Harness’s shipped `ConversationRoot` unchanged.
+- A dynamically registered `main.conversation` occupant for the center workspace (`conversation` on older Hosts); disposing it restores Harness’s shipped `ConversationRoot` unchanged.
 - `sidebar.footer.action` for the persistent Split mode toggle.
-- `ctx.sessions.list`, `open(id)`, `binding(id).session`, and public session projections for native selection tracking, history, streaming, prompts, permissions, token/context metrics, cancellation, and paging.
+- `ctx.sessions.list`, `open(id)`, `binding(id).session`, and public session projections for native selection tracking, prompts, permissions, token/context metrics, cancellation, and paging.
+- `ctx.uiConversation.binding(id).target("chat")` for history and streaming on current Hosts, with legacy session-snapshot fallback on older versions.
 - `ctx.modelDirectories.directoryFor(id)` for the shared per-session model catalog and selection state.
 - `ctx.workspaces.list` for native workspace and session labeling.
 

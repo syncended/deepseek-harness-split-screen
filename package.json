@@ -1,6 +1,6 @@
 {
   "name": "@syncended/dsh-split-screen",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "iTerm-style multi-chat center workspace for the DeepSeek Harness Web GUI.",
   "license": "MIT",
   "type": "module",
